@@ -1,5 +1,7 @@
 # 论文排版 Skill (Paper Formatting)
 
+[🇺🇸 English](README.md)
+
 Claude Code 学术论文排版技能。读取期刊/学校投稿模板中的排版规范，自动将论文草稿格式化为符合要求的文档。支持 Word (.docx) 和 LaTeX (.tex)。
 
 ## 功能

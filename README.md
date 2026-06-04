@@ -1,5 +1,7 @@
 # Paper Formatting Skill
 
+[🇨🇳 中文文档](README_zh.md)
+
 A Claude Code skill for formatting academic papers according to journal/university templates. Supports both Word (.docx) and LaTeX (.tex).
 
 ## What It Does
