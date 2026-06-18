@@ -84,11 +84,15 @@ Step 5: VERIFY
 - List ordering: 1) 2) 3) first level, then ①②③
 
 ### Punctuation
-- Chinese text → Chinese punctuation (，。；：)
-- English text → Western punctuation
-- CRITICAL: Full stop in Chinese text = "．" (U+FF0E fullwidth), NOT "。" (U+3002) and NOT ". " (dot+space)
-- Comma = "，" not ","
-- Keywords separated by "；" (fullwidth semicolon)
+- **Context-aware auto-detection**: Chinese text gets Chinese punctuation, English text keeps English punctuation
+  - `.` after Chinese char → `。`  |  `.` after English letter → `.` (kept)
+  - `,` → `，`  |  `:` → `：`  |  `;` → `；`  |  `?` → `？`  |  `!` → `！`
+  - `(` → `（`  |  `)` → `）`
+- **Protected from conversion**: URLs, email addresses, decimal numbers (3.14), abbreviations (i.e., etc.), numbered lists (1. 2. 3.)
+- **Full stop character** (configurable in rules.json → `punctuation.chinese_full_stop`):
+  - `"。"` (U+3002) — **Default**, standard Chinese period
+  - `"．"` (U+FF0E) — Only if template requires it (e.g., 深大学报理工版)
+- Keywords separated by `；` (fullwidth semicolon)
 
 ### Tables
 - Three-line table style (top thick, header-bottom thin, bottom thick)
@@ -190,7 +194,7 @@ def apply_three_line_table(table):
 
 1. **Don't just copy the template's visual font** — read the text rules (e.g., "正文叙述用5号宋体")
 2. **Don't skip bilingual elements** — Chinese papers need English title, abstract, keywords, and translated references
-3. **Don't use "。" for full stops** — use "．" (U+FF0E)
+3. **Don't blindly convert all periods** — English periods are kept in English context (after Latin letters); only periods after Chinese characters are converted to `。`. URLs, numbers, and abbreviations are auto-protected.
 4. **Don't leave tables as Table Grid** — convert to three-line
 5. **Don't number the introduction (引言)** — it should have no section number
 6. **Don't use Chinese punctuation in English text** — and vice versa

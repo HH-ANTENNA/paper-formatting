@@ -84,8 +84,58 @@ def apply_latex_formatting(content, rules):
             changes.append(f"Added: {fs}")
 
     # ── Punctuation fixes ──
-    # Replace "。" with "．" in Chinese text blocks
-    content = content.replace('。', '．')
+    # Use configurable full stop character (default: standard Chinese 。)
+    punctuation_rules = rules.get("punctuation", {})
+    full_stop = punctuation_rules.get("chinese_full_stop", "。")
+
+    # Keep existing Chinese periods as-is (no blind  。→ ． conversion)
+
+    # Fix common English punctuation in Chinese text (only adjacent to CJK chars)
+    # Protect URLs, email, numbers, and LaTeX commands from modification
+    protected_patterns = [
+        (r'https?://[a-zA-Z0-9._~:/?#\[\]@!$&()*+;=%\-]+', 'URL'),
+        (r'\\[a-zA-Z]+\{[^}]*\}', 'LATEX_CMD'),  # LaTeX commands with args
+        (r'\\[a-zA-Z]+', 'LATEX_MACRO'),           # Bare LaTeX macros
+        (r'\$\$?[^$]+\$\$?', 'MATH'),               # Math mode
+        (r'\(\d+(?:\.\d+)?\)', 'PAREN_NUM'),        # Parenthesized numbers
+        (r'\d+\.\d+', 'DECIMAL'),                    # Decimal numbers
+    ]
+    placeholders = {}
+    counter = [0]
+    for pattern, ptype in protected_patterns:
+        def make_replacer():
+            def replacer(m):
+                ph = f'\x00PROTECT{ptype}\x00{counter[0]}\x00'
+                placeholders[ph] = m.group(0)
+                counter[0] += 1
+                return ph
+            return replacer
+        content = re.sub(pattern, make_replacer(), content)
+
+    # Convert English punctuation adjacent to CJK characters
+    punct_map = {
+        ',': '，',
+        ':': '：',
+        ';': '；',
+        '?': '？',
+        '!': '！',
+        '(': '（',
+        ')': '）',
+    }
+    for en_punct, cn_punct in punct_map.items():
+        escaped = re.escape(en_punct)
+        # After CJK char
+        content = re.sub(f'(?<=[一-鿿]){escaped}', cn_punct, content)
+        # Before CJK char
+        content = re.sub(f'{escaped}(?=[一-鿿])', cn_punct, content)
+
+    # Handle English period: only convert to 。 when preceded by CJK char
+    # Period after English letter → kept as '.' (English sentence ending)
+    content = re.sub(r'(?<=[一-鿿])\.(?=\s|$|[一-鿿])', full_stop, content)
+
+    # Restore protected patterns
+    for ph, original in placeholders.items():
+        content = content.replace(ph, original)
 
     # ── Reference format ──
     # Ensure biblatex/natbib settings for sequential numbering

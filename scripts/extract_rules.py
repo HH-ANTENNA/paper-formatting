@@ -177,10 +177,15 @@ def build_hardcoded_rules():
         "line_spacing": 1.5,
         "first_line_indent_cm": 0.74,  # ≈2 Chinese characters at 5号
         "punctuation": {
-            "chinese_full_stop": "．",   # U+FF0E
+            "chinese_full_stop": "。",   # U+3002 — standard Chinese period
+            # Use "．" (U+FF0E) only if required by the template (e.g., 深大学报理工版)
             "chinese_comma": "，",
             "chinese_colon": "：",
+            "chinese_semicolon": "；",
             "keyword_separator": "；",
+            "auto_fix": True,    # Auto-convert English punct → Chinese in Chinese text
+            "protect_numbers": True,  # Don't convert decimal points
+            "protect_urls": True,     # Don't convert URLs
         },
         "table_style": "three_line",
         "reference_format": "sequential",  # [1], [2], ...

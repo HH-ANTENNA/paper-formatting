@@ -2,15 +2,36 @@
 """
 verify_format.py — Check a formatted document against template rules.
 
-Reports issues in two categories:
-  ✅ Fixed: issues that were automatically corrected
-  ⚠️ Manual: issues requiring human attention
+Reports issues in three categories:
+  ✅ Passed: rules that are correctly applied
+  ⚠️ Warnings: possible issues that need review
+  ❌ Manual: issues requiring human attention
 """
 import json
 import sys
 import re
 from docx import Document
 from docx.shared import Cm, Pt
+
+
+def is_chinese_char(ch):
+    """Check if a character is in the CJK range."""
+    cp = ord(ch)
+    return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
+            0x20000 <= cp <= 0x2A6DF or 0xF900 <= cp <= 0xFAFF or
+            0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF)
+
+
+# English punctuation that should NOT appear in Chinese-dominant text
+_EN_PUNCT_IN_CN_WARNING = {
+    ',': ('，(U+FF0C)', 'English comma "," in Chinese text'),
+    ';': ('；(U+FF1B)', 'English semicolon ";" in Chinese text'),
+    ':': ('：(U+FF1A)', 'English colon ":" in Chinese text after Chinese char'),
+    '?': ('？(U+FF1F)', 'English question mark "?" in Chinese text'),
+    '!': ('！(U+FF01)', 'English exclamation mark "!" in Chinese text'),
+    '(': ('（(U+FF08)', 'English left parenthesis "(" in Chinese text'),
+    ')': ('）(U+FF09)', 'English right parenthesis ")" in Chinese text'),
+}
 
 
 def check_document(doc_path, rules):
@@ -23,18 +44,27 @@ def check_document(doc_path, rules):
     l2 = rules.get("heading_l2", {})
     l3 = rules.get("heading_l3", {})
 
+    # Full stop configuration
+    punctuation_rules = rules.get("punctuation", {})
+    expected_full_stop = punctuation_rules.get("chinese_full_stop", "。")
+    full_stop_name = "．(U+FF0E)" if expected_full_stop == "．" else "。(U+3002)"
+
     # Check page size
     for i, section in enumerate(doc.sections):
         w_cm = section.page_width / 360000
         h_cm = section.page_height / 360000
         if abs(w_cm - 21.0) > 0.5 or abs(h_cm - 29.7) > 0.5:
             report["warnings"].append(f"Section {i}: page size {w_cm:.1f}x{h_cm:.1f}cm (expected A4)")
+        else:
+            report["passed"].append(f"Section {i}: page size A4 ({w_cm:.1f}x{h_cm:.1f}cm)")
 
     # Check paragraphs
     has_english_abstract = False
     has_english_keywords = False
     has_chinese_refs = False
     has_english_refs = False
+    punctuation_issues = []
+    full_stop_issues = []
 
     for i, p in enumerate(doc.paragraphs):
         text = p.text.strip()
@@ -55,17 +85,73 @@ def check_document(doc_path, rules):
             else:
                 has_english_refs = True
 
-        # Check for "。" usage
-        if '。' in text:
-            report["warnings"].append(
-                f"P[{i}]: Contains '。' (U+3002) — should use '．' (U+FF0E): "
-                f"{text[:60]}..."
-            )
+        # ── Punctuation checks for Chinese-dominant paragraphs ──
+        # Determine if this paragraph is Chinese-dominant
+        total_alphabetic = sum(1 for c in text if c.isalpha())
+        chinese_chars = sum(1 for c in text if '一' <= c <= '鿿')
+        is_chinese_dominant = chinese_chars > total_alphabetic * 0.5 and chinese_chars > 5
 
-        # Check for English punctuation in Chinese text
-        if any('一' <= c <= '鿿' for c in text):
-            if re.search(r'(?<=[一-鿿])[,]', text):
-                report["warnings"].append(f"P[{i}]: Chinese text uses English comma: {text[:60]}...")
+        if is_chinese_dominant:
+            # Check for English punctuation that should be Chinese
+            for en_punct, (cn_name, desc) in _EN_PUNCT_IN_CN_WARNING.items():
+                if en_punct in text:
+                    # For period, check context more carefully
+                    if en_punct == '.':
+                        continue  # Period handled separately below
+                    # Find the punctuation and check context
+                    for m in re.finditer(re.escape(en_punct), text):
+                        pos = m.start()
+                        prev_char = text[pos - 1] if pos > 0 else ''
+                        next_char = text[pos + 1] if pos + 1 < len(text) else ''
+                        prev_is_cjk = is_chinese_char(prev_char)
+                        next_is_cjk = is_chinese_char(next_char)
+                        if prev_is_cjk or next_is_cjk:
+                            punctuation_issues.append(
+                                f"P[{i}]: {desc}: "
+                                f"\"...{text[max(0,pos-5):pos+6]}...\" → should use {cn_name}"
+                            )
+                            break  # One mention per paragraph per punct type
+
+            # Check full stop: warn about "。" if template expects "．"
+            if '。' in text and expected_full_stop == '．':
+                # Count occurrences
+                count = text.count('。')
+                full_stop_issues.append(
+                    f"P[{i}]: {count}x '。'(U+3002) found — template expects {full_stop_name}: "
+                    f"\"{text[:60]}{'...' if len(text) > 60 else ''}\""
+                )
+
+            # Check full stop: warn about "．" if template expects "。"
+            if '．' in text and expected_full_stop == '。':
+                count = text.count('．')
+                full_stop_issues.append(
+                    f"P[{i}]: {count}x '．'(U+FF0E) found — template expects {full_stop_name}: "
+                    f"\"{text[:60]}{'...' if len(text) > 60 else ''}\""
+                )
+
+        # Check for isolated English period in Chinese-dominant text
+        # ('.' followed by space or newline, preceded by text)
+        if is_chinese_dominant:
+            for m in re.finditer(r'(?<=[^\d])\.(?=\s|$)', text):
+                pos = m.start()
+                prev_char = text[pos - 1] if pos > 0 else ''
+                if is_chinese_char(prev_char):
+                    punctuation_issues.append(
+                        f"P[{i}]: English period '.' after Chinese char — should use "
+                        f"{full_stop_name}: \"...{text[max(0,pos-5):pos+6]}...\""
+                    )
+                    break
+
+    # ── Aggregate punctuation warnings ──
+    if punctuation_issues:
+        report["warnings"].extend(punctuation_issues)
+    else:
+        report["passed"].append("No English punctuation found in Chinese-dominant text")
+
+    if full_stop_issues:
+        report["manual_fixes"].extend(full_stop_issues)
+    elif is_chinese_dominant:  # Only if we actually checked
+        report["passed"].append(f"Full stop character matches template ({full_stop_name})")
 
     # Bilingual checks
     if not has_english_abstract and rules.get("bilingual_required", True):

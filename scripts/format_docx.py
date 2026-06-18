@@ -68,19 +68,203 @@ def set_paragraph_spacing(paragraph, line_spacing=1.5, space_before=0, space_aft
         paragraph.alignment = alignment
 
 
-def fix_chinese_punctuation(text):
-    """Fix punctuation in Chinese text per template rules."""
-    # Full stop: "。" or "." followed by space → "．"
-    text = text.replace('。', '．')
-    # English dot followed by space → fullwidth full stop if in Chinese context
-    # (this needs context awareness, simplified here)
-    # Comma: "," → "，" when in Chinese context
-    # Colon: ":" → "：" when in Chinese context
-    text = re.sub(r'(?<=[一-鿿]),', '，', text)
-    text = re.sub(r'(?<=[一-鿿]):', '：', text)
-    text = re.sub(r'(?<=[一-鿿]);', '；', text)
+# English -> Chinese punctuation mapping
+# Characters that should be converted when in Chinese context
+_EN_TO_CN_PUNCT = {
+    ',': '，',   # COMMA -> FULLWIDTH COMMA
+    ':': '：',   # COLON -> FULLWIDTH COLON
+    ';': '；',   # SEMICOLON -> FULLWIDTH SEMICOLON
+    '?': '？',   # QUESTION MARK -> FULLWIDTH QUESTION MARK
+    '!': '！',   # EXCLAMATION MARK -> FULLWIDTH EXCLAMATION MARK
+    '(': '（',   # LEFT PARENTHESIS -> FULLWIDTH LEFT PARENTHESIS
+    ')': '）',   # RIGHT PARENTHESIS -> FULLWIDTH RIGHT PARENTHESIS
+}
+
+# Characters that should NOT be converted even in Chinese context
+# NOTE: Order matters - apply more specific patterns first.
+# AVOID \b (word boundary) - CJK chars/punct are Unicode word chars in Python.
+_PRESERVE_PATTERNS = [
+    # URLs
+    re.compile(r'https?://[a-zA-Z0-9._~:/?#\[\]@!$&()*+;=%\-]+'),
+    re.compile(r'ftp://[a-zA-Z0-9._~:/?#\[\]@!$&()*+;=%\-]+'),
+    # Email addresses
+    re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),
+    # Parenthesized numbers/math: (3.14), (1), (2.7) etc.
+    re.compile(r'\(\d+(?:\.\d+)?\)'),
+    # Version numbers (v2.1.3-alpha) - use negative lookahead instead of \b
+    re.compile(r'(?<!\d)v?\d+\.\d+(?:\.\d+)*(?:\-[a-zA-Z0-9]+)?(?![.\d])'),
+    # Decimal numbers (3.14, 1.5x)
+    re.compile(r'(?<!\d)\d+\.\d+(?![.\d])'),
+    # Numbered lists (1. 2. 3.) or heading numbers (1.1, 2.3.1)
+    re.compile(r'(?:^|(?<=\s))\d+(?:\.\d+)*\.(?=\s|$)'),
+    # Latin abbreviation blocks
+    re.compile(
+        r'(?:^|(?<=[\s(（])|(?<=[\u4e00-\u9fff]))'
+        r'(?:i\.e\.|e\.g\.|etc\.|vs\.|et\s+al\.|ca\.|approx\.)'
+        r'(?:[,;]?\s*(?:i\.e\.|e\.g\.|etc\.|vs\.|et\s+al\.|ca\.|approx\.))*'
+        r'(?:[,;]?)',
+        re.IGNORECASE
+    ),
+]
+
+
+def _protect_patterns(text):
+    """Replace protected patterns with placeholders so they aren't modified."""
+    protected = {}
+    counter = [0]
+
+    def replace(match):
+        placeholder = f'\x00PROTECT\x00{counter[0]}\x00'
+        protected[placeholder] = match.group(0)
+        counter[0] += 1
+        return placeholder
+
+    for pattern in _PRESERVE_PATTERNS:
+        text = pattern.sub(replace, text)
+
+    return text, protected
+
+
+def _restore_patterns(text, protected):
+    """Restore protected patterns from placeholders."""
+    for placeholder, original in protected.items():
+        text = text.replace(placeholder, original)
     return text
 
+
+def _convert_periods_by_context(text, full_stop):
+    """Convert ASCII periods to Chinese full stops where context is Chinese.
+
+    Skips: between digits (decimal), after ASCII letters (English sentence).
+    Converts: after CJK char, after digit (sentence-ending after number/version),
+              after closing bracket/paren when preceded by CJK/number.
+    """
+    chars = list(text)
+    n = len(chars)
+
+    def _find_real_prev(j):
+        """Look backwards from j to find meaningful preceding char.
+        Skips placeholders and closing brackets/parens."""
+        while j >= 0:
+            ch = chars[j]
+            if ch == '\x00':
+                j -= 1
+                while j >= 0 and chars[j] != '\x00':
+                    j -= 1
+                if j >= 0:
+                    j -= 1
+                continue
+            cp = ord(ch)
+            # ASCII closing brackets
+            if cp in (0x29, 0x5D, 0x7D, 0x3E):
+                j -= 1
+                continue
+            # CJK Symbols/Punctuation (U+3000-U+303F) + Fullwidth Forms (U+FF00-U+FFEF)
+            if 0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF:
+                j -= 1
+                continue
+            return ch
+        return ''
+
+    for i, ch in enumerate(chars):
+        if ch != '.':
+            continue
+
+        next_char = chars[i + 1] if i + 1 < n else ''
+        prev_char = chars[i - 1] if i > 0 else ''
+
+        # Between two digits -> decimal point, skip
+        if prev_char.isdigit() and next_char.isdigit():
+            continue
+
+        # Preceded by ASCII letter -> English sentence, keep
+        if prev_char.isalpha() and prev_char.isascii():
+            continue
+
+        # Preceded by CJK char -> Chinese sentence ending
+        if is_chinese_char(prev_char):
+            chars[i] = full_stop
+            continue
+
+        # Preceded by digit -> sentence-ending after number
+        if prev_char.isdigit():
+            chars[i] = full_stop
+            continue
+
+        # Preceded by closing bracket/paren/placeholder -> look further back
+        cp = ord(prev_char) if prev_char else 0
+        if (cp in (0x29, 0x5D, 0x7D, 0x3E)
+                or 0x3000 <= cp <= 0x303F
+                or 0xFF00 <= cp <= 0xFFEF
+                or prev_char == '\x00'):
+            real_prev = _find_real_prev(i - 1)
+            if real_prev and (is_chinese_char(real_prev) or real_prev.isdigit()):
+                chars[i] = full_stop
+
+    return ''.join(chars)
+
+
+def _convert_other_punct_by_context(text):
+    """Convert English comma/colon/etc. to Chinese where adjacent to CJK."""
+    chars = list(text)
+    for i, ch in enumerate(chars):
+        if ch not in _EN_TO_CN_PUNCT:
+            continue
+
+        prev_char = chars[i - 1] if i > 0 else ''
+        next_char = chars[i + 1] if i + 1 < len(chars) else ''
+
+        if is_chinese_char(prev_char) or is_chinese_char(next_char):
+            chars[i] = _EN_TO_CN_PUNCT[ch]
+
+    return ''.join(chars)
+
+
+def fix_chinese_punctuation(text, full_stop=None):
+    """Fix punctuation in Chinese text per template rules.
+
+    Auto-detects language context per punctuation mark:
+      - '.' after Chinese char -> '。' (U+3002)
+      - '.' after digit (sentence-ending) -> '。'
+      - '.' after ASCII letter -> kept as '.'
+      - Existing '。' kept unchanged
+
+    Preserves URLs, emails, decimal numbers, abbreviations, and numbered lists.
+
+    Args:
+        text: The text to fix.
+        full_stop: Override Chinese full stop char (default: '。').
+                   Use '．' (U+FF0E) only if specifically required by template.
+    """
+    if not text:
+        return text
+
+    if full_stop is None:
+        full_stop = '。'
+
+    # If caller explicitly wants '．', normalize existing 。 -> ．
+    if full_stop == '．':
+        text = text.replace('。', '．')
+
+    # Pass 1: Protect URLs, numbers, abbreviations FIRST
+    # This prevents parenthesized numbers (3.14) from having their
+    # parentheses converted before the numbers are hidden
+    text, protected = _protect_patterns(text)
+
+    # Pass 2: Convert periods where context is Chinese
+    text = _convert_periods_by_context(text, full_stop)
+
+    # Pass 3: Convert other English punct adjacent to CJK
+    text = _convert_other_punct_by_context(text)
+
+    # Restore protected patterns
+    text = _restore_patterns(text, protected)
+
+    # Pass 4: After restoration, convert periods that now follow restored content
+    # (e.g., "...(3.14)和(2.7)." where (3.14)/(2.7) were protected)
+    text = _convert_periods_by_context(text, full_stop)
+
+    return text
 
 def detect_paragraph_type(paragraph):
     """Heuristically detect what type of content a paragraph contains."""
@@ -173,6 +357,10 @@ def phase_a_page_and_body(doc, rules):
     line_spacing = rules.get("line_spacing", 1.5)
     indent_cm = rules.get("first_line_indent_cm", 0.74)
 
+    # Full stop character: default '。' (U+3002), override with '．' (U+FF0E) if template requires
+    punctuation_rules = rules.get("punctuation", {})
+    full_stop = punctuation_rules.get("chinese_full_stop", "。")
+
     # Apply to all "Normal" style paragraphs
     for p in doc.paragraphs:
         ptype = detect_paragraph_type(p)
@@ -185,12 +373,12 @@ def phase_a_page_and_body(doc, rules):
 
         # Fix punctuation in Chinese text
         if text_is_chinese(text):
-            new_text = fix_chinese_punctuation(text)
+            new_text = fix_chinese_punctuation(text, full_stop)
             if new_text != text:
                 # Only modify if there are actual runs to update
                 if p.runs:
                     for run in p.runs:
-                        run.text = fix_chinese_punctuation(run.text)
+                        run.text = fix_chinese_punctuation(run.text, full_stop)
                     changes.append(f"Punctuation fixed in: {text[:40]}...")
 
         # Apply body formatting to body paragraphs
