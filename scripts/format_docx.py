@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-format_docx.py — Format a Word document according to paper template rules.
+format_docx.py — Format a Word document according to the default paper template.
 
 Phases: A=Page+Body, B=FrontMatter, C=Headings, D=Tables+Figures, E=References
 Run with --phase all (default) or specify individual phases.
@@ -22,7 +22,6 @@ from docx.oxml import parse_xml, OxmlElement
 # ═══════════════════════════════════════════════════════════
 
 def is_chinese_char(ch):
-    """Check if a character is in the CJK range."""
     cp = ord(ch)
     return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
             0x20000 <= cp <= 0x2A6DF or 0xF900 <= cp <= 0xFAFF or
@@ -30,20 +29,19 @@ def is_chinese_char(ch):
 
 
 def text_is_chinese(text):
-    """Check if majority of text is Chinese."""
     if not text:
         return False
     chinese_count = sum(1 for c in text if is_chinese_char(c))
     return chinese_count > len(text) * 0.3
 
 
-def set_run_font(run, chinese_font, english_font, size_pt, bold=None):
-    """Set font properties for a run with CJK support."""
+def set_run_font(run, chinese_font, english_font, size_pt, bold=None, color_rgb=None):
     run.font.size = Pt(size_pt)
     run.font.name = english_font
     if bold is not None:
         run.bold = bold
-
+    if color_rgb is not None:
+        run.font.color.rgb = color_rgb
     rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn('w:rFonts'))
     if rFonts is None:
@@ -57,7 +55,6 @@ def set_run_font(run, chinese_font, english_font, size_pt, bold=None):
 
 def set_paragraph_spacing(paragraph, line_spacing=1.5, space_before=0, space_after=0,
                           first_line_indent_cm=0.74, alignment=None):
-    """Set paragraph spacing and indentation."""
     pf = paragraph.paragraph_format
     pf.line_spacing = line_spacing
     pf.space_before = Pt(space_before)
@@ -68,38 +65,22 @@ def set_paragraph_spacing(paragraph, line_spacing=1.5, space_before=0, space_aft
         paragraph.alignment = alignment
 
 
-# English -> Chinese punctuation mapping
-# Characters that should be converted when in Chinese context
+# English → Chinese punctuation mapping
 _EN_TO_CN_PUNCT = {
-    ',': '，',   # COMMA -> FULLWIDTH COMMA
-    ':': '：',   # COLON -> FULLWIDTH COLON
-    ';': '；',   # SEMICOLON -> FULLWIDTH SEMICOLON
-    '?': '？',   # QUESTION MARK -> FULLWIDTH QUESTION MARK
-    '!': '！',   # EXCLAMATION MARK -> FULLWIDTH EXCLAMATION MARK
-    '(': '（',   # LEFT PARENTHESIS -> FULLWIDTH LEFT PARENTHESIS
-    ')': '）',   # RIGHT PARENTHESIS -> FULLWIDTH RIGHT PARENTHESIS
+    ',': '，', ':': '：', ';': '；', '?': '？', '!': '！',
+    '(': '（', ')': '）',
 }
 
-# Characters that should NOT be converted even in Chinese context
-# NOTE: Order matters - apply more specific patterns first.
-# AVOID \b (word boundary) - CJK chars/punct are Unicode word chars in Python.
 _PRESERVE_PATTERNS = [
-    # URLs
     re.compile(r'https?://[a-zA-Z0-9._~:/?#\[\]@!$&()*+;=%\-]+'),
     re.compile(r'ftp://[a-zA-Z0-9._~:/?#\[\]@!$&()*+;=%\-]+'),
-    # Email addresses
     re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),
-    # Parenthesized numbers/math: (3.14), (1), (2.7) etc.
     re.compile(r'\(\d+(?:\.\d+)?\)'),
-    # Version numbers (v2.1.3-alpha) - use negative lookahead instead of \b
     re.compile(r'(?<!\d)v?\d+\.\d+(?:\.\d+)*(?:\-[a-zA-Z0-9]+)?(?![.\d])'),
-    # Decimal numbers (3.14, 1.5x)
     re.compile(r'(?<!\d)\d+\.\d+(?![.\d])'),
-    # Numbered lists (1. 2. 3.) or heading numbers (1.1, 2.3.1)
     re.compile(r'(?:^|(?<=\s))\d+(?:\.\d+)*\.(?=\s|$)'),
-    # Latin abbreviation blocks
     re.compile(
-        r'(?:^|(?<=[\s(（])|(?<=[\u4e00-\u9fff]))'
+        r'(?:^|(?<=[\s(（])|(?<=[一-鿿]))'
         r'(?:i\.e\.|e\.g\.|etc\.|vs\.|et\s+al\.|ca\.|approx\.)'
         r'(?:[,;]?\s*(?:i\.e\.|e\.g\.|etc\.|vs\.|et\s+al\.|ca\.|approx\.))*'
         r'(?:[,;]?)',
@@ -109,42 +90,29 @@ _PRESERVE_PATTERNS = [
 
 
 def _protect_patterns(text):
-    """Replace protected patterns with placeholders so they aren't modified."""
     protected = {}
     counter = [0]
-
     def replace(match):
         placeholder = f'\x00PROTECT\x00{counter[0]}\x00'
         protected[placeholder] = match.group(0)
         counter[0] += 1
         return placeholder
-
     for pattern in _PRESERVE_PATTERNS:
         text = pattern.sub(replace, text)
-
     return text, protected
 
 
 def _restore_patterns(text, protected):
-    """Restore protected patterns from placeholders."""
     for placeholder, original in protected.items():
         text = text.replace(placeholder, original)
     return text
 
 
 def _convert_periods_by_context(text, full_stop):
-    """Convert ASCII periods to Chinese full stops where context is Chinese.
-
-    Skips: between digits (decimal), after ASCII letters (English sentence).
-    Converts: after CJK char, after digit (sentence-ending after number/version),
-              after closing bracket/paren when preceded by CJK/number.
-    """
     chars = list(text)
     n = len(chars)
 
     def _find_real_prev(j):
-        """Look backwards from j to find meaningful preceding char.
-        Skips placeholders and closing brackets/parens."""
         while j >= 0:
             ch = chars[j]
             if ch == '\x00':
@@ -155,43 +123,26 @@ def _convert_periods_by_context(text, full_stop):
                     j -= 1
                 continue
             cp = ord(ch)
-            # ASCII closing brackets
             if cp in (0x29, 0x5D, 0x7D, 0x3E):
-                j -= 1
-                continue
-            # CJK Symbols/Punctuation (U+3000-U+303F) + Fullwidth Forms (U+FF00-U+FFEF)
+                j -= 1; continue
             if 0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF:
-                j -= 1
-                continue
+                j -= 1; continue
             return ch
         return ''
 
     for i, ch in enumerate(chars):
         if ch != '.':
             continue
-
         next_char = chars[i + 1] if i + 1 < n else ''
         prev_char = chars[i - 1] if i > 0 else ''
-
-        # Between two digits -> decimal point, skip
         if prev_char.isdigit() and next_char.isdigit():
             continue
-
-        # Preceded by ASCII letter -> English sentence, keep
         if prev_char.isalpha() and prev_char.isascii():
             continue
-
-        # Preceded by CJK char -> Chinese sentence ending
         if is_chinese_char(prev_char):
-            chars[i] = full_stop
-            continue
-
-        # Preceded by digit -> sentence-ending after number
+            chars[i] = full_stop; continue
         if prev_char.isdigit():
-            chars[i] = full_stop
-            continue
-
-        # Preceded by closing bracket/paren/placeholder -> look further back
+            chars[i] = full_stop; continue
         cp = ord(prev_char) if prev_char else 0
         if (cp in (0x29, 0x5D, 0x7D, 0x3E)
                 or 0x3000 <= cp <= 0x303F
@@ -200,126 +151,100 @@ def _convert_periods_by_context(text, full_stop):
             real_prev = _find_real_prev(i - 1)
             if real_prev and (is_chinese_char(real_prev) or real_prev.isdigit()):
                 chars[i] = full_stop
-
     return ''.join(chars)
 
 
 def _convert_other_punct_by_context(text):
-    """Convert English comma/colon/etc. to Chinese where adjacent to CJK."""
     chars = list(text)
     for i, ch in enumerate(chars):
         if ch not in _EN_TO_CN_PUNCT:
             continue
-
         prev_char = chars[i - 1] if i > 0 else ''
         next_char = chars[i + 1] if i + 1 < len(chars) else ''
-
         if is_chinese_char(prev_char) or is_chinese_char(next_char):
             chars[i] = _EN_TO_CN_PUNCT[ch]
-
     return ''.join(chars)
 
 
 def fix_chinese_punctuation(text, full_stop=None):
-    """Fix punctuation in Chinese text per template rules.
-
-    Auto-detects language context per punctuation mark:
-      - '.' after Chinese char -> '。' (U+3002)
-      - '.' after digit (sentence-ending) -> '。'
-      - '.' after ASCII letter -> kept as '.'
-      - Existing '。' kept unchanged
-
-    Preserves URLs, emails, decimal numbers, abbreviations, and numbered lists.
-
-    Args:
-        text: The text to fix.
-        full_stop: Override Chinese full stop char (default: '。').
-                   Use '．' (U+FF0E) only if specifically required by template.
-    """
     if not text:
         return text
-
     if full_stop is None:
         full_stop = '。'
-
-    # If caller explicitly wants '．', normalize existing 。 -> ．
     if full_stop == '．':
         text = text.replace('。', '．')
-
-    # Pass 1: Protect URLs, numbers, abbreviations FIRST
-    # This prevents parenthesized numbers (3.14) from having their
-    # parentheses converted before the numbers are hidden
     text, protected = _protect_patterns(text)
-
-    # Pass 2: Convert periods where context is Chinese
     text = _convert_periods_by_context(text, full_stop)
-
-    # Pass 3: Convert other English punct adjacent to CJK
     text = _convert_other_punct_by_context(text)
-
-    # Restore protected patterns
     text = _restore_patterns(text, protected)
-
-    # Pass 4: After restoration, convert periods that now follow restored content
-    # (e.g., "...(3.14)和(2.7)." where (3.14)/(2.7) were protected)
     text = _convert_periods_by_context(text, full_stop)
-
     return text
 
-def detect_paragraph_type(paragraph):
-    """Heuristically detect what type of content a paragraph contains."""
+
+# ═══════════════════════════════════════════════════════════
+# Paragraph type detection
+# ═══════════════════════════════════════════════════════════
+
+def detect_paragraph_type(paragraph, rules=None):
     text = paragraph.text.strip()
     if not text:
         return "empty"
 
-    # Check for keywords patterns
-    if re.match(r'^关键词[：:]', text):
+    style_name = paragraph.style.name if paragraph.style else ''
+
+    # Style-based detection
+    if style_name == 'Heading 1' or style_name == 'heading 1':
+        return "heading_l1"
+    if style_name == 'Heading 2' or style_name == 'heading 2':
+        return "heading_l2"
+    if style_name == 'Heading 3' or style_name == 'heading 3':
+        return "heading_l3"
+
+    bilingual = rules.get("bilingual_required", False) if rules else False
+
+    # Abstract / Keywords (支持两种格式: 【摘要】 和 摘要：)
+    if re.match(r'^【?\s*摘\s*要\s*[】》：:]', text):
+        return "abstract_chinese_heading"
+    if re.match(r'^Abstract[：:]?', text, re.IGNORECASE):
+        return "abstract_english_heading"
+    if re.match(r'^【?\s*关键[词字]\s*[】》：:]', text):
         return "keywords_chinese"
     if re.match(r'^Key words?[：:]', text, re.IGNORECASE):
         return "keywords_english"
 
-    # Check for abstract patterns
-    if re.match(r'^摘\s*要[：:]?', text):
-        return "abstract_chinese_heading"
-    if re.match(r'^Abstract[：:]?', text, re.IGNORECASE):
-        return "abstract_english_heading"
+    # Numbered headings: "1  XXXX", "1.1  XXXX", "1.1.1  XXXX"
+    heading_match = re.match(r'^(\d+(?:\.\d+)*)\s{1,2}\S', text)
+    if heading_match:
+        depth = heading_match.group(1).count('.') + 1
+        return f"heading_l{depth}" if depth <= 3 else "heading_l3"
 
-    # Check for headings
-    if re.match(r'^第?\d+(\.\d+)*\s', text):
-        # Numbered heading like "1 XXXX" or "1.1 XXXX" or "1.1.1 XXXX"
-        depth = text.split()[0].count('.') + 1
-        if depth == 1:
-            return "heading_l1"
-        elif depth == 2:
-            return "heading_l2"
-        else:
-            return "heading_l3"
-
-    # Check unnumbered headings
-    if text in ['引言', '绪论', '结语', '结论', '致谢', '参考文献', 'References']:
+    # Unnumbered headings (引言, 绪论, etc.)
+    if text in ['引言', '绪论', '结语', '结论', '致谢']:
         return "unnumbered_heading"
 
-    # Check for table/figure captions
-    if re.match(r'^表\s*\d+', text):
-        return "table_caption_chinese"
-    if re.match(r'^Table\s+\d+', text, re.IGNORECASE):
-        return "table_caption_english"
+    # Reference section
+    if text in ['参考文献', 'References'] or text.startswith('参考文献'):
+        return "reference_heading"
+
+    # Figure / Table captions
     if re.match(r'^图\s*\d+', text):
         return "figure_caption_chinese"
     if re.match(r'^Fig\.?\s*\d+', text, re.IGNORECASE):
         return "figure_caption_english"
+    if re.match(r'^表\s*\d+', text):
+        return "table_caption_chinese"
+    if re.match(r'^Table\s+\d+', text, re.IGNORECASE):
+        return "table_caption_english"
 
-    # Check for reference entries
+    # Reference entries
     if re.match(r'^\[\d+\]', text):
         return "reference_entry"
 
-    # Check for author line (typically after title, before affiliation)
+    # Author / affiliation (journal mode)
     if re.match(r'^作者\d+', text):
         return "author_chinese"
     if re.match(r'^Author\s+\d+', text, re.IGNORECASE):
         return "author_english"
-
-    # Check for affiliation
     if re.match(r'^\d+\)', text):
         return "affiliation"
 
@@ -327,14 +252,12 @@ def detect_paragraph_type(paragraph):
 
 
 # ═══════════════════════════════════════════════════════════
-# Phase A: Page Setup + Body Font + Paragraph + Punctuation
+# Phase A: Page + Body
 # ═══════════════════════════════════════════════════════════
 
 def phase_a_page_and_body(doc, rules):
-    """Apply page setup, body font, paragraph formatting, and punctuation."""
     changes = []
 
-    # Page setup
     page_rules = rules.get("extracted", {}).get("page", rules.get("page", {}))
     for section in doc.sections:
         if page_rules.get("width_cm"):
@@ -349,220 +272,297 @@ def phase_a_page_and_body(doc, rules):
             changes.append(f"Margins: T={page_rules['top_margin_cm']} B={page_rules['bottom_margin_cm']} "
                           f"L={page_rules['left_margin_cm']} R={page_rules['right_margin_cm']}cm")
 
-    # Body font
     body = rules.get("body_font", {})
     chinese_font = body.get("chinese", "宋体")
     english_font = body.get("english", "Times New Roman")
-    size_pt = body.get("size_pt", 10.5)
-    line_spacing = rules.get("line_spacing", 1.5)
+    size_pt = body.get("size_pt", 11)
+    line_spacing = rules.get("line_spacing", 1.15)
     indent_cm = rules.get("first_line_indent_cm", 0.74)
 
-    # Full stop character: default '。' (U+3002), override with '．' (U+FF0E) if template requires
     punctuation_rules = rules.get("punctuation", {})
     full_stop = punctuation_rules.get("chinese_full_stop", "。")
 
-    # Apply to all "Normal" style paragraphs
     for p in doc.paragraphs:
-        ptype = detect_paragraph_type(p)
-        if ptype in ("empty",):
+        ptype = detect_paragraph_type(p, rules)
+        if ptype == "empty":
             continue
-
         text = p.text.strip()
         if not text:
             continue
 
-        # Fix punctuation in Chinese text
-        if text_is_chinese(text):
-            new_text = fix_chinese_punctuation(text, full_stop)
-            if new_text != text:
-                # Only modify if there are actual runs to update
-                if p.runs:
-                    for run in p.runs:
-                        run.text = fix_chinese_punctuation(run.text, full_stop)
-                    changes.append(f"Punctuation fixed in: {text[:40]}...")
+        # Fix punctuation in Chinese body / abstract / keywords
+        if ptype in ("body", "abstract_chinese_heading", "keywords_chinese"):
+            if text_is_chinese(text) and p.runs:
+                for run in p.runs:
+                    run.text = fix_chinese_punctuation(run.text, full_stop)
 
-        # Apply body formatting to body paragraphs
+        # Apply body formatting
         if ptype == "body":
             for run in p.runs:
-                set_run_font(run, chinese_font, english_font, size_pt)
+                set_run_font(run, chinese_font, english_font, size_pt,
+                            color_rgb=RGBColor(0, 0, 0))
             set_paragraph_spacing(p, line_spacing, first_line_indent_cm=indent_cm,
                                   alignment=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        elif ptype == "empty":
-            continue
 
-    changes.append(f"Body font: {chinese_font}/{english_font} {size_pt}pt, "
-                   f"line spacing {line_spacing}, indent {indent_cm}cm")
+    changes.append(f"Body: {chinese_font}/{english_font} {size_pt}pt, "
+                   f"line {line_spacing}, indent {indent_cm}cm")
     return changes
 
 
 # ═══════════════════════════════════════════════════════════
-# Phase B: Front Matter (Title, Authors, Abstract, Keywords)
+# Phase B: Front Matter
 # ═══════════════════════════════════════════════════════════
 
 def phase_b_front_matter(doc, rules):
-    """Format front matter: title, authors, abstract, keywords."""
     changes = []
 
-    title_font = rules.get("title", {"chinese": "宋体", "english": "Times New Roman", "size_pt": 22})
-    author_font = rules.get("author", {"chinese": "楷体", "english": "Times New Roman", "size_pt": 14})
-    abstract_font = rules.get("abstract", {"chinese": "楷体", "english": "Times New Roman", "size_pt": 10.5})
-    kw_font = rules.get("keywords", {"chinese": "楷体", "english": "Times New Roman", "size_pt": 10.5})
+    title_font = rules.get("title", {})
+    abstract_font = rules.get("abstract", {})
+    abstract_label_font = rules.get("abstract_label", abstract_font)
+    kw_font = rules.get("keywords", {})
+    kw_label_font = rules.get("keywords_label", kw_font)
+    bilingual = rules.get("bilingual_required", False)
+
+    title_found = False
+    in_abstract = False
 
     for p in doc.paragraphs:
-        ptype = detect_paragraph_type(p)
+        ptype = detect_paragraph_type(p, rules)
         text = p.text.strip()
         if not text:
+            in_abstract = False
             continue
 
         if ptype == "empty":
             continue
 
-        # First non-empty paragraph is typically the title
-        # (We rely on position for title detection since it may not have a clear marker)
-        elif ptype == "body":
-            # Could be title if it's the first few paragraphs
-            pass  # Title detection needs positional context
+        # ── Title ──
+        if not title_found and ptype == "body":
+            pf = p.paragraph_format
+            is_centered = (p.alignment == WD_ALIGN_PARAGRAPH.CENTER or
+                          pf.alignment == WD_ALIGN_PARAGRAPH.CENTER)
+            if is_centered or (len(text) < 80 and not re.match(r'^\d', text)):
+                for run in p.runs:
+                    set_run_font(run,
+                                title_font.get("chinese", "宋体"),
+                                title_font.get("english", "Times New Roman"),
+                                title_font.get("size_pt", 18),
+                                bold=title_font.get("bold", True),
+                                color_rgb=RGBColor(0, 0, 0))
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
+                                     space_before=12, space_after=12,
+                                     first_line_indent_cm=0)
+                title_found = True
+                changes.append(f"Title: {text[:50]}")
+                continue
 
-        elif ptype == "author_chinese" or ptype == "author_english":
-            for run in p.runs:
-                set_run_font(run, author_font["chinese"], author_font["english"],
-                            author_font["size_pt"])
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            set_paragraph_spacing(p, 1.5, first_line_indent_cm=0)
-            changes.append(f"Author formatted: {text[:50]}")
-
-        elif ptype == "abstract_chinese_heading":
-            for run in p.runs:
-                set_run_font(run, abstract_font["chinese"], abstract_font["english"],
-                            abstract_font["size_pt"], bold=True)
-            changes.append(f"Abstract heading formatted: {text[:50]}")
-
-        elif ptype == "abstract_english_heading":
-            for run in p.runs:
-                set_run_font(run, abstract_font["english"], abstract_font["english"],
-                            abstract_font["size_pt"], bold=True)
-            changes.append(f"English abstract heading formatted: {text[:50]}")
-
-        elif ptype == "keywords_chinese":
-            for run in p.runs:
-                set_run_font(run, kw_font["chinese"], kw_font["english"],
-                            kw_font["size_pt"])
-            # Fix keyword separator
+        # ── Abstract (inline: "【摘要】content" or "摘要：content") ──
+        if ptype == "abstract_chinese_heading":
+            in_abstract = True
             if p.runs:
+                # Normalize: 【摘要】 → keep, 摘要： → 【摘要】
+                p.runs[0].text = re.sub(r'^摘\s*要[：:]', '【摘要】', p.runs[0].text)
+                p.runs[0].text = re.sub(r'^【?\s*摘\s*要\s*】?\s*', '【摘要】', p.runs[0].text)
+                for j, run in enumerate(p.runs):
+                    if j == 0:
+                        set_run_font(run,
+                                    abstract_label_font.get("chinese", "楷体"),
+                                    abstract_label_font.get("english", "Times New Roman"),
+                                    abstract_label_font.get("size_pt", 12),
+                                    bold=False)
+                    else:
+                        set_run_font(run,
+                                    abstract_font.get("chinese", "楷体"),
+                                    abstract_font.get("english", "Times New Roman"),
+                                    abstract_font.get("size_pt", 10.5),
+                                    bold=False)
+            set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
+                                 first_line_indent_cm=0.74)
+            changes.append(f"Abstract: {text[:50]}")
+            continue
+
+        # ── English Abstract (when bilingual enabled) ──
+        if ptype == "abstract_english_heading" and bilingual:
+            for run in p.runs:
+                set_run_font(run, abstract_font.get("english", "Times New Roman"),
+                            abstract_font.get("english", "Times New Roman"),
+                            abstract_font.get("size_pt", 10.5), bold=True)
+            changes.append(f"English abstract: {text[:50]}")
+            continue
+
+        # ── Abstract body (continuation paragraphs between abstract and keywords) ──
+        if in_abstract and ptype == "body" and not title_found:
+            for run in p.runs:
+                set_run_font(run, abstract_font.get("chinese", "楷体"),
+                            abstract_font.get("english", "Times New Roman"),
+                            abstract_font.get("size_pt", 10.5))
+            set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
+                                 first_line_indent_cm=0.74)
+            changes.append(f"Abstract body: {text[:50]}")
+            continue
+
+        # ── Keywords (inline: "【关键词】item1；item2" or "关键词：item1；item2") ──
+        if ptype == "keywords_chinese":
+            in_abstract = False
+            if p.runs:
+                # Normalize: 【关键词】 → keep, 关键词： → 【关键词】
+                p.runs[0].text = re.sub(r'^关键[词字][：:]', '【关键词】', p.runs[0].text)
+                p.runs[0].text = re.sub(r'^【?\s*关键[词字]\s*】?\s*', '【关键词】', p.runs[0].text)
+                for j, run in enumerate(p.runs):
+                    if j == 0:
+                        set_run_font(run,
+                                    kw_label_font.get("chinese", "楷体"),
+                                    kw_label_font.get("english", "Times New Roman"),
+                                    kw_label_font.get("size_pt", 12),
+                                    bold=kw_label_font.get("bold", True))
+                    else:
+                        set_run_font(run,
+                                    kw_font.get("chinese", "楷体"),
+                                    kw_font.get("english", "Times New Roman"),
+                                    kw_font.get("size_pt", 10.5))
+                # Fix separator
                 for run in p.runs:
                     run.text = run.text.replace(',', '；').replace('，', '；')
-            changes.append(f"Keywords formatted: {text[:50]}")
+            set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
+                                 first_line_indent_cm=0)
+            changes.append(f"Keywords: {text[:50]}")
+            continue
 
-        elif ptype == "keywords_english":
+        # ── English Keywords (when bilingual enabled) ──
+        if ptype == "keywords_english" and bilingual:
             for run in p.runs:
-                set_run_font(run, kw_font["english"], kw_font["english"],
-                            kw_font["size_pt"])
-            changes.append(f"English keywords formatted: {text[:50]}")
+                set_run_font(run, kw_font.get("english", "Times New Roman"),
+                            kw_font.get("english", "Times New Roman"),
+                            kw_font.get("size_pt", 10.5))
+            changes.append(f"English keywords: {text[:50]}")
+            continue
+
+        # ── Author (journal mode) ──
+        if ptype in ("author_chinese", "author_english"):
+            author_font = rules.get("author", {})
+            for run in p.runs:
+                set_run_font(run,
+                            author_font.get("chinese", "楷体"),
+                            author_font.get("english", "Times New Roman"),
+                            author_font.get("size_pt", 14))
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
+                                 first_line_indent_cm=0)
+            changes.append(f"Author: {text[:50]}")
+            continue
 
     return changes
 
 
 # ═══════════════════════════════════════════════════════════
-# Phase C: Heading Hierarchy
+# Phase C: Headings
 # ═══════════════════════════════════════════════════════════
 
 def phase_c_headings(doc, rules):
-    """Format heading hierarchy: L1, L2, L3, unnumbered headings."""
+    """Format heading hierarchy: L1, L2, L3.
+
+    Applies Word built-in Heading 1/2/3 styles (which enables collapse/expand
+    in the navigation pane), then overrides font formatting to match template.
+    """
     changes = []
 
-    l1 = rules.get("heading_l1", {"chinese": "仿宋", "english": "Times New Roman", "size_pt": 16, "bold": False})
-    l2 = rules.get("heading_l2", {"chinese": "黑体", "english": "Times New Roman", "size_pt": 10.5, "bold": True})
-    l3 = rules.get("heading_l3", {"chinese": "楷体", "english": "Times New Roman", "size_pt": 10.5, "bold": False})
+    l1 = rules.get("heading_l1", {"chinese": "宋体", "english": "Times New Roman", "size_pt": 14, "bold": True})
+    l2 = rules.get("heading_l2", {"chinese": "宋体", "english": "Times New Roman", "size_pt": 15, "bold": True})
+    l3 = rules.get("heading_l3", {"chinese": "楷体", "english": "Times New Roman", "size_pt": 14, "bold": False})
 
-    heading_map = {
-        "heading_l1": l1,
-        "heading_l2": l2,
-        "heading_l3": l3,
-        "unnumbered_heading": l1,  # Unnumbered headings use L1 style
+    heading_config = {
+        "heading_l1": ("Heading 1", l1),
+        "heading_l2": ("Heading 2", l2),
+        "heading_l3": ("Heading 3", l3),
+        "unnumbered_heading": ("Heading 1", l1),
     }
 
+    line_spacing = rules.get("line_spacing", 1.15)
+
     for p in doc.paragraphs:
-        ptype = detect_paragraph_type(p)
-        if ptype not in heading_map:
+        ptype = detect_paragraph_type(p, rules)
+        if ptype not in heading_config:
             continue
 
-        font_config = heading_map[ptype]
+        style_name, font_config = heading_config[ptype]
+
+        # Apply built-in Heading style (enables collapse/expand in Word)
+        try:
+            p.style = doc.styles[style_name]
+        except KeyError:
+            pass  # Style not found, skip but still apply font formatting below
+
         for run in p.runs:
-            set_run_font(run, font_config["chinese"], font_config["english"],
-                        font_config["size_pt"], bold=font_config.get("bold"))
-        set_paragraph_spacing(p, 1.5, space_before=6, space_after=3,
+            set_run_font(run,
+                        font_config["chinese"], font_config["english"],
+                        font_config["size_pt"],
+                        bold=font_config.get("bold"),
+                        color_rgb=RGBColor(0, 0, 0))  # Override theme color from Heading style
+
+        set_paragraph_spacing(p, line_spacing, space_before=12, space_after=6,
                               first_line_indent_cm=0, alignment=WD_ALIGN_PARAGRAPH.LEFT)
-        changes.append(f"{ptype} formatted: {p.text.strip()[:50]}")
+        changes.append(f"{ptype} → {style_name} ({font_config.get('chinese','?')} "
+                       f"{font_config.get('size_pt','?')}pt"
+                       f"{' Bold' if font_config.get('bold') else ''}): "
+                       f"{p.text.strip()[:50]}")
 
     return changes
 
 
 # ═══════════════════════════════════════════════════════════
-# Phase D: Tables and Figures
+# Phase D: Tables + Figures
 # ═══════════════════════════════════════════════════════════
 
 def phase_d_tables_figures(doc, rules):
-    """Apply three-line table style and format captions."""
     changes = []
     caption_font = rules.get("caption", {"chinese": "宋体", "english": "Times New Roman", "size_pt": 9})
+    bilingual = rules.get("bilingual_required", False)
 
-    # Format table captions
     for p in doc.paragraphs:
-        ptype = detect_paragraph_type(p)
+        ptype = detect_paragraph_type(p, rules)
         if ptype in ("table_caption_chinese", "table_caption_english",
                      "figure_caption_chinese", "figure_caption_english"):
+
+            if not bilingual and "english" in ptype:
+                continue
+
             for run in p.runs:
-                is_bold = "表" in run.text or "Table" in run.text or "图" in run.text or "Fig" in run.text
-                # Bold the label part only (simplified)
                 set_run_font(run, caption_font["chinese"], caption_font["english"],
                             caption_font["size_pt"])
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             set_paragraph_spacing(p, 1.0, first_line_indent_cm=0)
-            changes.append(f"Caption formatted: {p.text.strip()[:50]}")
+            changes.append(f"Caption: {p.text.strip()[:50]}")
 
-    # Apply three-line table style
     for table in doc.tables:
         apply_three_line_table(table)
-        # Format cell text
         for row in table.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
                     for run in p.runs:
                         set_run_font(run, caption_font["chinese"], caption_font["english"],
                                     caption_font["size_pt"])
-        changes.append(f"Table converted to three-line ({len(table.rows)} rows)")
+        changes.append(f"Table → three-line ({len(table.rows)} rows)")
 
     return changes
 
 
 def apply_three_line_table(table):
-    """Convert a table to three-line academic style.
-
-    Three-line means:
-    - Thick top border on header row (1.5pt)
-    - Thin bottom border on header row (0.75pt)
-    - Thick bottom border on last row (1.5pt)
-    - No left/right/vertical borders
-    """
     tbl = table._tbl
     tblPr = tbl.tblPr
     if tblPr is None:
         tblPr = OxmlElement('w:tblPr')
         tbl.insert(0, tblPr)
 
-    # Remove table-level borders
     tblBorders = OxmlElement('w:tblBorders')
     for border_name in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
         border = OxmlElement(f'w:{border_name}')
         border.set(qn('w:val'), 'nil')
         tblBorders.append(border)
-    # Remove existing tblBorders if present
-    existing = tblPr.findall(qn('w:tblBorders'))
-    for e in existing:
+    for e in tblPr.findall(qn('w:tblBorders')):
         tblPr.remove(e)
     tblPr.append(tblBorders)
 
-    # Style each row
     num_rows = len(table.rows)
     for ri, row in enumerate(table.rows):
         for cell in row.cells:
@@ -570,36 +570,29 @@ def apply_three_line_table(table):
             tcBorders = OxmlElement('w:tcBorders')
 
             if ri == 0:
-                # Header row: thick top + thin bottom
                 top = OxmlElement('w:top')
                 top.set(qn('w:val'), 'single')
-                top.set(qn('w:sz'), '12')  # 1.5pt
+                top.set(qn('w:sz'), '12')
                 top.set(qn('w:color'), '000000')
                 tcBorders.append(top)
-
                 bottom = OxmlElement('w:bottom')
                 bottom.set(qn('w:val'), 'single')
-                bottom.set(qn('w:sz'), '6')  # 0.75pt
+                bottom.set(qn('w:sz'), '6')
                 bottom.set(qn('w:color'), '000000')
                 tcBorders.append(bottom)
-
             elif ri == num_rows - 1:
-                # Last row: thick bottom
                 bottom = OxmlElement('w:bottom')
                 bottom.set(qn('w:val'), 'single')
                 bottom.set(qn('w:sz'), '12')
                 bottom.set(qn('w:color'), '000000')
                 tcBorders.append(bottom)
 
-            # Remove left/right borders for all cells
             for side in ['left', 'right']:
                 border = OxmlElement(f'w:{side}')
                 border.set(qn('w:val'), 'nil')
                 tcBorders.append(border)
 
-            # Replace existing borders
-            existing_borders = tcPr.findall(qn('w:tcBorders'))
-            for eb in existing_borders:
+            for eb in tcPr.findall(qn('w:tcBorders')):
                 tcPr.remove(eb)
             tcPr.append(tcBorders)
 
@@ -609,26 +602,30 @@ def apply_three_line_table(table):
 # ═══════════════════════════════════════════════════════════
 
 def phase_e_references(doc, rules):
-    """Format references section."""
     changes = []
 
-    ref_title_font = rules.get("reference_title", {"chinese": "黑体", "english": "Times New Roman", "size_pt": 10.5})
-    ref_body_font = rules.get("reference_body", {"chinese": "宋体", "english": "Times New Roman", "size_pt": 9})
+    ref_title_font = rules.get("reference_title",
+                               {"chinese": "楷体", "english": "Times New Roman", "size_pt": 10.5})
+    ref_body_font = rules.get("reference_body",
+                              {"chinese": "宋体", "english": "Times New Roman", "size_pt": 9})
+    hanging_cm = rules.get("reference_hanging_cm", 0.74)
 
     in_refs = False
     for p in doc.paragraphs:
-        ptype = detect_paragraph_type(p)
+        ptype = detect_paragraph_type(p, rules)
         text = p.text.strip()
         if not text:
             continue
 
-        # Detect reference section header
-        if text in ['参考文献', 'References'] or text.startswith('参考文献'):
+        # Reference section header
+        if ptype == "reference_heading" or text == '参考文献' or text.startswith('参考文献'):
             in_refs = True
             for run in p.runs:
                 set_run_font(run, ref_title_font["chinese"], ref_title_font["english"],
-                            ref_title_font["size_pt"], bold=True)
-            set_paragraph_spacing(p, 1.5, space_before=12, first_line_indent_cm=0)
+                            ref_title_font["size_pt"],
+                            bold=ref_title_font.get("bold", False))
+            set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
+                                 space_before=12, first_line_indent_cm=0)
             changes.append("Reference title formatted")
             continue
 
@@ -636,20 +633,23 @@ def phase_e_references(doc, rules):
             for run in p.runs:
                 set_run_font(run, ref_body_font["chinese"], ref_body_font["english"],
                             ref_body_font["size_pt"])
-            # Hanging indent for references
             pf = p.paragraph_format
-            pf.first_line_indent = Cm(-0.74)
-            pf.left_indent = Cm(0.74)
-            changes.append(f"Reference entry formatted: {text[:50]}")
+            pf.first_line_indent = Cm(-hanging_cm)
+            pf.left_indent = Cm(hanging_cm)
+            changes.append(f"Reference: {text[:50]}")
+            continue
 
-        # Fix non-standard reference numbering (e.g., "1." → "[1]")
-        elif in_refs and re.match(r'^\d+\.', text):
+        # Fix "1." → "[1]"
+        if in_refs and re.match(r'^\d+\.', text):
             for run in p.runs:
                 set_run_font(run, ref_body_font["chinese"], ref_body_font["english"],
                             ref_body_font["size_pt"])
             if p.runs:
                 p.runs[0].text = re.sub(r'^(\d+)\.', r'[\1]', p.runs[0].text)
-            changes.append(f"Reference numbering fixed: {text[:50]}")
+            pf = p.paragraph_format
+            pf.first_line_indent = Cm(-hanging_cm)
+            pf.left_indent = Cm(hanging_cm)
+            changes.append(f"Reference fixed: {text[:50]}")
 
     return changes
 
@@ -674,30 +674,31 @@ def main():
     parser.add_argument("rules", help="Rules JSON file (from extract_rules.py)")
     parser.add_argument("--output", "-o", required=True, help="Output .docx file")
     parser.add_argument("--phase", default="all",
-                       help="Phases to run: A,B,C,D,E or 'all' (default)")
+                       help="Phases: A,B,C,D,E or 'all' (default)")
     args = parser.parse_args()
 
-    # Load rules
     with open(args.rules, 'r', encoding='utf-8') as f:
         rules = json.load(f)
 
-    # Load document
     doc = Document(args.input)
 
-    # Determine phases to run
+    print(f"Template: {rules.get('template_name', 'Custom')}")
+    print(f"Body: {rules.get('body_font', {})}")
+    print(f"Bilingual: {rules.get('bilingual_required', False)}")
+    print()
+
     if args.phase == "all":
         phases_to_run = ["A", "B", "C", "D", "E"]
     else:
         phases_to_run = [p.strip() for p in args.phase.split(",")]
 
-    # Run phases
     all_changes = []
     for phase_id in phases_to_run:
         if phase_id not in PHASES:
             print(f"Unknown phase: {phase_id}")
             continue
         name, func = PHASES[phase_id]
-        print(f"\n{'='*60}")
+        print(f"{'='*60}")
         print(f"Phase {phase_id}: {name}")
         print(f"{'='*60}")
         changes = func(doc, rules)
@@ -705,10 +706,9 @@ def main():
             print(f"  [OK] {c}")
         all_changes.extend(changes)
 
-    # Save
     doc.save(args.output)
     print(f"\n{'='*60}")
-    print(f"Formatted document saved to: {args.output}")
+    print(f"Saved: {args.output}")
     print(f"Total changes: {len(all_changes)}")
 
 

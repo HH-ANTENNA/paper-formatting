@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-format_latex.py — Format a LaTeX paper according to template rules.
+format_latex.py — Format a LaTeX paper according to the default template rules.
 
 Modifies the preamble and applies formatting conventions.
 """
@@ -11,9 +11,8 @@ import re
 
 
 def apply_latex_formatting(content, rules):
-    """Apply formatting rules to LaTeX source."""
     changes = []
-    lines = content.split('\n')
+    bilingual = rules.get("bilingual_required", False)
 
     # ── Page geometry ──
     page = rules.get("extracted", {}).get("page", rules.get("page", {}))
@@ -21,15 +20,13 @@ def apply_latex_formatting(content, rules):
         geo_cmd = (
             f"\\geometry{{"
             f"a4paper,"
-            f"top={page.get('top_margin_cm', 3.6)}cm,"
-            f"bottom={page.get('bottom_margin_cm', 1.9)}cm,"
-            f"left={page.get('left_margin_cm', 1.8)}cm,"
-            f"right={page.get('right_margin_cm', 1.8)}cm"
+            f"top={page.get('top_margin_cm', 2.54)}cm,"
+            f"bottom={page.get('bottom_margin_cm', 2.54)}cm,"
+            f"left={page.get('left_margin_cm', 3.17)}cm,"
+            f"right={page.get('right_margin_cm', 3.17)}cm"
             f"}}"
         )
-        # Check if geometry is already in preamble
         if '\\geometry{' not in content:
-            # Insert after documentclass
             content = re.sub(
                 r'(\\documentclass(?:\[.*?\])?\{.*?\})',
                 f'\\1\n{geo_cmd}',
@@ -40,39 +37,47 @@ def apply_latex_formatting(content, rules):
     # ── Font settings ──
     body = rules.get("body_font", {})
     font_settings = []
+
     if body:
-        font_settings.append(f"\\setmainfont{{{body.get('english', 'Times New Roman')}}}")
-        font_settings.append(f"\\setCJKmainfont{{{body.get('chinese', 'SimSun')}}}")
+        font_settings.append(
+            f"\\setmainfont{{{body.get('english', 'Times New Roman')}}}"
+        )
+        font_settings.append(
+            f"\\setCJKmainfont{{{body.get('chinese', 'SimSun')}}}"
+        )
 
     # Heading fonts
     l1 = rules.get("heading_l1", {})
     l2 = rules.get("heading_l2", {})
     l3 = rules.get("heading_l3", {})
 
-    if l1 or l2 or l3:
+    if l1:
         font_settings.append(
-            f"\\CTEXsetup[nameformat={{\\zihao{{3}}\\fangsong}}]{{section}}"
+            f"\\CTEXsetup[nameformat={{\\zihao{{4}}\\bfseries}}]{{section}}"
         )
+    if l2:
         font_settings.append(
-            f"\\CTEXsetup[nameformat={{\\zihao{{5}}\\heiti}}]{{subsection}}"
+            f"\\CTEXsetup[nameformat={{\\zihao{{3}}\\bfseries}}]{{subsection}}"
         )
+    if l3:
         font_settings.append(
-            f"\\CTEXsetup[nameformat={{\\zihao{{5}}\\kaishu}}]{{subsubsection}}"
+            f"\\CTEXsetup[nameformat={{\\zihao{{4}}\\kaishu}}]{{subsubsection}}"
         )
 
-    # ── Line spacing ──
-    ls = rules.get("line_spacing", 1.5)
+    # Line spacing
+    ls = rules.get("line_spacing", 1.15)
     font_settings.append(f"\\linespread{{{ls}}}")
 
-    # ── Paragraph indent ──
+    # Paragraph indent
     indent = rules.get("first_line_indent_cm", 0.74)
-    # 2 characters ≈ 0.74cm at 5号
     font_settings.append(f"\\setlength{{\\parindent}}{{{indent}cm}}")
 
-    # Inject font settings after geometry
+    # Abstract setup
+    font_settings.append("\\ctexset{abstractname={摘要}}")
+
+    # Inject
     for fs in reversed(font_settings):
         if fs not in content:
-            # Add after geometry or documentclass
             if '\\geometry{' in content:
                 content = content.replace('\\geometry{', f'{fs}\n\\geometry{{')
             else:
@@ -83,22 +88,17 @@ def apply_latex_formatting(content, rules):
                 )
             changes.append(f"Added: {fs}")
 
-    # ── Punctuation fixes ──
-    # Use configurable full stop character (default: standard Chinese 。)
+    # ── Punctuation ──
     punctuation_rules = rules.get("punctuation", {})
     full_stop = punctuation_rules.get("chinese_full_stop", "。")
 
-    # Keep existing Chinese periods as-is (no blind  。→ ． conversion)
-
-    # Fix common English punctuation in Chinese text (only adjacent to CJK chars)
-    # Protect URLs, email, numbers, and LaTeX commands from modification
     protected_patterns = [
         (r'https?://[a-zA-Z0-9._~:/?#\[\]@!$&()*+;=%\-]+', 'URL'),
-        (r'\\[a-zA-Z]+\{[^}]*\}', 'LATEX_CMD'),  # LaTeX commands with args
-        (r'\\[a-zA-Z]+', 'LATEX_MACRO'),           # Bare LaTeX macros
-        (r'\$\$?[^$]+\$\$?', 'MATH'),               # Math mode
-        (r'\(\d+(?:\.\d+)?\)', 'PAREN_NUM'),        # Parenthesized numbers
-        (r'\d+\.\d+', 'DECIMAL'),                    # Decimal numbers
+        (r'\\[a-zA-Z]+\{[^}]*\}', 'LATEX_CMD'),
+        (r'\\[a-zA-Z]+', 'LATEX_MACRO'),
+        (r'\$\$?[^$]+\$\$?', 'MATH'),
+        (r'\(\d+(?:\.\d+)?\)', 'PAREN_NUM'),
+        (r'\d+\.\d+', 'DECIMAL'),
     ]
     placeholders = {}
     counter = [0]
@@ -112,33 +112,21 @@ def apply_latex_formatting(content, rules):
             return replacer
         content = re.sub(pattern, make_replacer(), content)
 
-    # Convert English punctuation adjacent to CJK characters
     punct_map = {
-        ',': '，',
-        ':': '：',
-        ';': '；',
-        '?': '？',
-        '!': '！',
-        '(': '（',
-        ')': '）',
+        ',': '，', ':': '：', ';': '；', '?': '？', '!': '！',
+        '(': '（', ')': '）',
     }
     for en_punct, cn_punct in punct_map.items():
         escaped = re.escape(en_punct)
-        # After CJK char
         content = re.sub(f'(?<=[一-鿿]){escaped}', cn_punct, content)
-        # Before CJK char
         content = re.sub(f'{escaped}(?=[一-鿿])', cn_punct, content)
 
-    # Handle English period: only convert to 。 when preceded by CJK char
-    # Period after English letter → kept as '.' (English sentence ending)
     content = re.sub(r'(?<=[一-鿿])\.(?=\s|$|[一-鿿])', full_stop, content)
 
-    # Restore protected patterns
     for ph, original in placeholders.items():
         content = content.replace(ph, original)
 
-    # ── Reference format ──
-    # Ensure biblatex/natbib settings for sequential numbering
+    # ── References ──
     if '\\usepackage' in content and 'biblatex' not in content and 'natbib' not in content:
         ref_pkg = '\\usepackage[sort&compress,numbers]{natbib}'
         content = content.replace(
@@ -169,10 +157,10 @@ def main():
     with open(args.output, 'w', encoding='utf-8') as f:
         f.write(new_content)
 
-    print(f"LaTeX formatting complete. {len(changes)} changes made:")
+    print(f"LaTeX formatted. {len(changes)} changes:")
     for c in changes:
         print(f"  ✓ {c}")
-    print(f"Saved to: {args.output}")
+    print(f"Saved: {args.output}")
 
 
 if __name__ == '__main__':
