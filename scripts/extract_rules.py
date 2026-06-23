@@ -138,10 +138,12 @@ def build_default_rules():
             "right_margin_cm": 3.17,
         },
 
-        # ── Body text: 宋体 小四 (11pt), 1.15x, justified ──
-        "body_font": {"chinese": "宋体", "english": "Times New Roman", "size_pt": 11},
-        "line_spacing": 1.15,
+        # ── Body text: 宋体 五号 (10.5pt), 单倍行距, 段前段后0.5行 ──
+        "body_font": {"chinese": "宋体", "english": "Times New Roman", "size_pt": 10.5},
+        "line_spacing": 1.0,
         "first_line_indent_cm": 0.74,
+        "body_space_before_pt": 6,
+        "body_space_after_pt": 6,
 
         # ── Title: 宋体 小二 (18pt) Bold, Center ──
         "title": {"chinese": "宋体", "english": "Times New Roman", "size_pt": 18, "bold": True},
@@ -158,10 +160,17 @@ def build_default_rules():
         "keywords_label": {"chinese": "楷体", "english": "Times New Roman", "size_pt": 12, "bold": True},
         "keywords": {"chinese": "楷体", "english": "Times New Roman", "size_pt": 10.5},
 
-        # ── Headings ──
-        "heading_l1": {"chinese": "宋体", "english": "Times New Roman", "size_pt": 14, "bold": True},
-        "heading_l2": {"chinese": "宋体", "english": "Times New Roman", "size_pt": 15, "bold": True},
-        "heading_l3": {"chinese": "楷体", "english": "Times New Roman", "size_pt": 14, "bold": False},
+        # ── Headings: 全部黑体加粗, 单倍行距, 段前段后0.5行, 仅字号不同 ──
+        # L1: 黑体 三号 (16pt)
+        "heading_l1": {"chinese": "黑体", "english": "Times New Roman", "size_pt": 16, "bold": True},
+        # L2: 黑体 小三 (15pt)
+        "heading_l2": {"chinese": "黑体", "english": "Times New Roman", "size_pt": 15, "bold": True},
+        # L3: 黑体 四号 (14pt)
+        "heading_l3": {"chinese": "黑体", "english": "Times New Roman", "size_pt": 14, "bold": True},
+        # Heading spacing
+        "heading_line_spacing": 1.0,
+        "heading_space_before_pt": 6,
+        "heading_space_after_pt": 6,
 
         # ── Figure / Table caption: 宋体 小五 (9pt), Center ──
         "caption": {"chinese": "宋体", "english": "Times New Roman", "size_pt": 9},

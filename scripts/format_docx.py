@@ -301,7 +301,12 @@ def phase_a_page_and_body(doc, rules):
             for run in p.runs:
                 set_run_font(run, chinese_font, english_font, size_pt,
                             color_rgb=RGBColor(0, 0, 0))
-            set_paragraph_spacing(p, line_spacing, first_line_indent_cm=indent_cm,
+            body_space_before = rules.get("body_space_before_pt", 6)
+            body_space_after = rules.get("body_space_after_pt", 6)
+            set_paragraph_spacing(p, line_spacing,
+                                  space_before=body_space_before,
+                                  space_after=body_space_after,
+                                  first_line_indent_cm=indent_cm,
                                   alignment=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
     changes.append(f"Body: {chinese_font}/{english_font} {size_pt}pt, "
@@ -500,8 +505,14 @@ def phase_c_headings(doc, rules):
                         bold=font_config.get("bold"),
                         color_rgb=RGBColor(0, 0, 0))  # Override theme color from Heading style
 
-        set_paragraph_spacing(p, line_spacing, space_before=12, space_after=6,
-                              first_line_indent_cm=0, alignment=WD_ALIGN_PARAGRAPH.LEFT)
+        heading_ls = rules.get("heading_line_spacing", 1.0)
+        heading_sb = rules.get("heading_space_before_pt", 6)
+        heading_sa = rules.get("heading_space_after_pt", 6)
+        set_paragraph_spacing(p, heading_ls,
+                              space_before=heading_sb,
+                              space_after=heading_sa,
+                              first_line_indent_cm=0,
+                              alignment=WD_ALIGN_PARAGRAPH.LEFT)
         changes.append(f"{ptype} → {style_name} ({font_config.get('chinese','?')} "
                        f"{font_config.get('size_pt','?')}pt"
                        f"{' Bold' if font_config.get('bold') else ''}): "

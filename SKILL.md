@@ -67,8 +67,8 @@ Based on the 电子工艺报告 (Electronic Process Report) format, with journal
 ### Page & Body
 - Paper: A4 (21cm × 29.7cm)
 - Margins: top=2.54cm, bottom=2.54cm, left=3.17cm, right=3.17cm
-- Body text: 宋体 (SimSun), 小四 (11pt), 1.15x line spacing, justified
-- First-line indent: 2 characters (≈0.74cm at 小四)
+- Body text: 宋体 (SimSun), 五号 (10.5pt), 单倍行距, 段前段后0.5行 (6pt), justified
+- First-line indent: 2 characters (≈0.74cm at 五号)
 
 ### Font Hierarchy
 | Element | Font | Size | Bold | Align |
@@ -78,9 +78,9 @@ Based on the 电子工艺报告 (Electronic Process Report) format, with journal
 | Abstract body | 楷体 | 五号 (10.5pt) | — | Justified |
 | Keywords label "【关键词】" | 楷体 | 小四 (12pt) | Bold | Left |
 | Keywords items | 楷体 | 五号 (10.5pt) | — | Left |
-| L1 heading "1  XXX" | 宋体 | 四号 (14pt) | Bold | Left |
-| L2 heading "1.1  XXX" | 宋体 | 小三 (15pt) | Bold | Left |
-| L3 heading "1.1.1  XXX" | 楷体 | 四号 (14pt) | — | Left |
+| L1 heading "1  XXX" | 黑体 (SimHei) | 三号 (16pt) | Bold | Left |
+| L2 heading "1.1  XXX" | 黑体 (SimHei) | 小三 (15pt) | Bold | Left |
+| L3 heading "1.1.1  XXX" | 黑体 (SimHei) | 四号 (14pt) | Bold | Left |
 | Figure caption "图X  ..." | 宋体 | 小五 (9pt) | — | Center |
 | Table caption "表X  ..." | 宋体 | 小五 (9pt) | — | Center |
 | Reference title "参考文献" | 楷体 | 五号 (10.5pt) | — | Left |
@@ -88,10 +88,12 @@ Based on the 电子工艺报告 (Electronic Process Report) format, with journal
 
 ### Headings
 - ALL sections are numbered: including 引言 (1), 参考文献 (last number)
+- **全部黑体加粗**，单倍行距，段前段后0.5行 (6pt)
+- 仅字号区分层级：L1 三号 16pt → L2 小三 15pt → L3 四号 14pt
 - L1: `"1  引言"` (number + 2 spaces + title)
 - L2: `"1.1  项目背景"` (number + 2 spaces + title)
 - L3: `"1.1.1  经济可行性"` (number + 1~2 spaces + title)
-- Use Heading 1 / Heading 2 / Heading 3 styles
+- Use Heading 1 / Heading 2 / Heading 3 styles (enables collapse/expand)
 
 ### Abstract & Keywords
 - Abstract: `【摘要】` + content (same paragraph, inline format, black lenticular brackets U+3010/U+3011)
