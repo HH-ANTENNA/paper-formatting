@@ -626,6 +626,8 @@ def phase_e_references(doc, rules):
     ref_body_font = rules.get("reference_body",
                               {"chinese": "宋体", "english": "Times New Roman", "size_pt": 9})
     hanging_cm = rules.get("reference_hanging_cm", 0.74)
+    ref_line_spacing = rules.get("reference_line_spacing", rules.get("line_spacing", 1.0))
+    ref_space_after = rules.get("reference_space_after_pt", 0)
 
     in_refs = False
     for p in doc.paragraphs:
@@ -634,9 +636,12 @@ def phase_e_references(doc, rules):
         if not text:
             continue
 
-        # Reference section header
-        if ptype == "reference_heading" or text == '参考文献' or text.startswith('参考文献'):
+        # Reference section header (accepts 参考文献, 【参考文献】, References)
+        if ptype == "reference_heading" or text == '参考文献' or text.startswith('参考文献') or text == '【参考文献】' or text.startswith('【参考文献】'):
             in_refs = True
+            # Normalize to 【参考文献】 format
+            if p.runs:
+                p.runs[0].text = re.sub(r'^【?\s*参考文献\s*】?\s*', '【参考文献】', p.runs[0].text)
             for run in p.runs:
                 set_run_font(run, ref_title_font["chinese"], ref_title_font["english"],
                             ref_title_font["size_pt"],
@@ -653,6 +658,8 @@ def phase_e_references(doc, rules):
             pf = p.paragraph_format
             pf.first_line_indent = Cm(-hanging_cm)
             pf.left_indent = Cm(hanging_cm)
+            pf.line_spacing = ref_line_spacing
+            pf.space_after = Pt(ref_space_after)
             changes.append(f"Reference: {text[:50]}")
             continue
 
@@ -666,6 +673,8 @@ def phase_e_references(doc, rules):
             pf = p.paragraph_format
             pf.first_line_indent = Cm(-hanging_cm)
             pf.left_indent = Cm(hanging_cm)
+            pf.line_spacing = ref_line_spacing
+            pf.space_after = Pt(ref_space_after)
             changes.append(f"Reference fixed: {text[:50]}")
 
     return changes
