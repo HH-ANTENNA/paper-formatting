@@ -40,9 +40,16 @@ def set_run_font(run, chinese_font, english_font, size_pt, bold=None, color_rgb=
     run.font.name = english_font
     if bold is not None:
         run.bold = bold
+    # Also explicitly handle bold at XML level to be safe
+    rPr = run._element.get_or_add_rPr()
+    if bold == False:
+        for b_el in rPr.findall(qn('w:b')):
+            rPr.remove(b_el)
+        for bCs_el in rPr.findall(qn('w:bCs')):
+            rPr.remove(bCs_el)
     if color_rgb is not None:
         run.font.color.rgb = color_rgb
-    rPr = run._element.get_or_add_rPr()
+    # rPr already fetched above
     rFonts = rPr.find(qn('w:rFonts'))
     if rFonts is None:
         rFonts = OxmlElement('w:rFonts')
@@ -302,7 +309,7 @@ def phase_a_page_and_body(doc, rules):
         if ptype == "body":
             for run in p.runs:
                 set_run_font(run, chinese_font, english_font, size_pt,
-                            color_rgb=RGBColor(0, 0, 0))
+                            bold=False, color_rgb=RGBColor(0, 0, 0))
             body_space_before = rules.get("body_space_before_pt", 6)
             body_space_after = rules.get("body_space_after_pt", 6)
             set_paragraph_spacing(p, line_spacing,
@@ -367,6 +374,11 @@ def phase_b_front_matter(doc, rules):
         # ── Abstract (inline: "【摘要】content" or "摘要：content") ──
         if ptype == "abstract_chinese_heading":
             in_abstract = True
+            # Apply Heading 1 style (enables collapse/expand in navigation pane)
+            try:
+                p.style = doc.styles['Heading 1']
+            except KeyError:
+                pass
             if p.runs:
                 # Normalize: 【摘要】 → keep, 摘要： → 【摘要】
                 p.runs[0].text = re.sub(r'^摘\s*要[：:]', '【摘要】', p.runs[0].text)
@@ -385,7 +397,8 @@ def phase_b_front_matter(doc, rules):
                                     abstract_font.get("size_pt", 10.5),
                                     bold=False)
             set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
-                                 first_line_indent_cm=0.74)
+                                 space_before=7, space_after=7,
+                                 first_line_indent_cm=0)
             changes.append(f"Abstract: {text[:50]}")
             continue
 
@@ -639,6 +652,11 @@ def phase_e_references(doc, rules):
         # Reference section header (accepts 参考文献, 【参考文献】, References)
         if ptype == "reference_heading" or text == '参考文献' or text.startswith('参考文献') or text == '【参考文献】' or text.startswith('【参考文献】'):
             in_refs = True
+            # Apply Heading 1 style (like template) for collapse/expand
+            try:
+                p.style = doc.styles['Heading 1']
+            except KeyError:
+                pass
             # Normalize to 【参考文献】 format
             if p.runs:
                 p.runs[0].text = re.sub(r'^【?\s*参考文献\s*】?\s*', '【参考文献】', p.runs[0].text)
@@ -647,14 +665,14 @@ def phase_e_references(doc, rules):
                             ref_title_font["size_pt"],
                             bold=ref_title_font.get("bold", False))
             set_paragraph_spacing(p, rules.get("line_spacing", 1.15),
-                                 space_before=12, first_line_indent_cm=0)
+                                 space_before=6, space_after=6, first_line_indent_cm=0)
             changes.append("Reference title formatted")
             continue
 
         if in_refs and ptype == "reference_entry":
             for run in p.runs:
                 set_run_font(run, ref_body_font["chinese"], ref_body_font["english"],
-                            ref_body_font["size_pt"])
+                            ref_body_font["size_pt"], bold=False)
             pf = p.paragraph_format
             pf.first_line_indent = Cm(-hanging_cm)
             pf.left_indent = Cm(hanging_cm)
@@ -667,7 +685,7 @@ def phase_e_references(doc, rules):
         if in_refs and re.match(r'^\d+\.', text):
             for run in p.runs:
                 set_run_font(run, ref_body_font["chinese"], ref_body_font["english"],
-                            ref_body_font["size_pt"])
+                            ref_body_font["size_pt"], bold=False)
             if p.runs:
                 p.runs[0].text = re.sub(r'^(\d+)\.', r'[\1]', p.runs[0].text)
             pf = p.paragraph_format
