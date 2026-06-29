@@ -51,6 +51,7 @@ Step 4: FORMAT (phased, user confirms each phase)
     Phase C: Heading hierarchy (L1/L2/L3)
     Phase D: Tables, figures, equations
     Phase E: References
+    Phase F: Citation superscript (【1】 → [1]^)
     │
     ▼
 Step 5: VERIFY
@@ -120,6 +121,15 @@ Based on the 电子工艺报告 (Electronic Process Report) format, with journal
 - Hanging indent: first line -0.74cm, left indent 0.74cm
 - Body: 宋体 小五 (9pt)
 
+### Citation Superscript (Phase F)
+- **In-text citations**: All `【N】` style citations → superscript `[N]` format
+  - `【1】` → superscript `[1]`, `【2】` → superscript `[2]`, etc.
+  - Consecutive citations: `【2】【3】` → superscript `[2][3]` (each individually superscripted)
+  - Comma-separated within one bracket: `【1,2】` → superscript `[1,2]`
+- **Protected**: `【摘要】` and `【关键词】` labels are NOT converted (they are semantic labels, not citations)
+- **Reference section**: Reference entries are NOT touched
+- Superscript formatting: `vertAlign=superscript`, font size reduced to 7.5pt
+
 ### Punctuation
 - **Context-aware**: Chinese text → Chinese punctuation; English text → English punctuation
   - `.` after CJK char → `。`  |  `.` after Latin letter → `.` (kept)
@@ -160,6 +170,7 @@ Applies formatting rules to a .docx file in phases.
 python scripts/format_docx.py input.docx rules.json -o output.docx
 python scripts/format_docx.py input.docx rules.json -o output.docx --phase B  # front matter only
 python scripts/format_docx.py input.docx rules.json -o output.docx --phase A,C  # page + headings only
+python scripts/format_docx.py input.docx rules.json -o output.docx --phase F  # citation superscript only
 ```
 
 ### format_latex.py

@@ -139,7 +139,7 @@ def _convert_periods_by_context(text, full_stop):
             continue
         if prev_char.isalpha() and prev_char.isascii():
             continue
-        if is_chinese_char(prev_char):
+        if prev_char and is_chinese_char(prev_char):
             chars[i] = full_stop; continue
         if prev_char.isdigit():
             chars[i] = full_stop; continue
@@ -161,7 +161,7 @@ def _convert_other_punct_by_context(text):
             continue
         prev_char = chars[i - 1] if i > 0 else ''
         next_char = chars[i + 1] if i + 1 < len(chars) else ''
-        if is_chinese_char(prev_char) or is_chinese_char(next_char):
+        if (prev_char and is_chinese_char(prev_char)) or (next_char and is_chinese_char(next_char)):
             chars[i] = _EN_TO_CN_PUNCT[ch]
     return ''.join(chars)
 
@@ -192,15 +192,9 @@ def detect_paragraph_type(paragraph, rules=None):
 
     style_name = paragraph.style.name if paragraph.style else ''
 
-    # Style-based detection
-    if style_name == 'Heading 1' or style_name == 'heading 1':
-        return "heading_l1"
-    if style_name == 'Heading 2' or style_name == 'heading 2':
-        return "heading_l2"
-    if style_name == 'Heading 3' or style_name == 'heading 3':
-        return "heading_l3"
-
     bilingual = rules.get("bilingual_required", False) if rules else False
+
+    # ── Content-based detection FIRST (more specific than style) ──
 
     # Abstract / Keywords (支持两种格式: 【摘要】 和 摘要：)
     if re.match(r'^【?\s*摘\s*要\s*[】》：:]', text):
@@ -212,6 +206,10 @@ def detect_paragraph_type(paragraph, rules=None):
     if re.match(r'^Key words?[：:]', text, re.IGNORECASE):
         return "keywords_english"
 
+    # Reference section
+    if text in ['参考文献', 'References', '【参考文献】'] or text.startswith('参考文献') or text.startswith('【参考文献】'):
+        return "reference_heading"
+
     # Numbered headings: "1  XXXX", "1.1  XXXX", "1.1.1  XXXX"
     heading_match = re.match(r'^(\d+(?:\.\d+)*)\s{1,2}\S', text)
     if heading_match:
@@ -221,10 +219,6 @@ def detect_paragraph_type(paragraph, rules=None):
     # Unnumbered headings (引言, 绪论, etc.)
     if text in ['引言', '绪论', '结语', '结论', '致谢']:
         return "unnumbered_heading"
-
-    # Reference section
-    if text in ['参考文献', 'References'] or text.startswith('参考文献'):
-        return "reference_heading"
 
     # Figure / Table captions
     if re.match(r'^图\s*\d+', text):
@@ -247,6 +241,14 @@ def detect_paragraph_type(paragraph, rules=None):
         return "author_english"
     if re.match(r'^\d+\)', text):
         return "affiliation"
+
+    # ── Style-based detection LAST (English + Chinese style names) ──
+    if style_name in ('Heading 1', 'heading 1', '标题一', '标题一', '标题 1', '标题1'):
+        return "heading_l1"
+    if style_name in ('Heading 2', 'heading 2', '标题二', '标题二', '标题 2', '标题2'):
+        return "heading_l2"
+    if style_name in ('Heading 3', 'heading 3', '标题三', '标题三', '标题 3', '标题3'):
+        return "heading_l3"
 
     return "body"
 
@@ -477,10 +479,10 @@ def phase_c_headings(doc, rules):
     l3 = rules.get("heading_l3", {"chinese": "楷体", "english": "Times New Roman", "size_pt": 14, "bold": False})
 
     heading_config = {
-        "heading_l1": ("Heading 1", l1),
-        "heading_l2": ("Heading 2", l2),
-        "heading_l3": ("Heading 3", l3),
-        "unnumbered_heading": ("Heading 1", l1),
+        "heading_l1": (["Heading 1", "heading 1", "标题一", "标题一", "标题 1", "标题1"], l1),
+        "heading_l2": (["Heading 2", "heading 2", "标题二", "标题二", "标题 2", "标题2"], l2),
+        "heading_l3": (["Heading 3", "heading 3", "标题三", "标题三", "标题 3", "标题3"], l3),
+        "unnumbered_heading": (["Heading 1", "heading 1", "标题一", "标题一", "标题 1", "标题1"], l1),
     }
 
     line_spacing = rules.get("line_spacing", 1.15)
@@ -490,13 +492,17 @@ def phase_c_headings(doc, rules):
         if ptype not in heading_config:
             continue
 
-        style_name, font_config = heading_config[ptype]
+        style_names, font_config = heading_config[ptype]
 
         # Apply built-in Heading style (enables collapse/expand in Word)
-        try:
-            p.style = doc.styles[style_name]
-        except KeyError:
-            pass  # Style not found, skip but still apply font formatting below
+        applied_style = False
+        for sn in style_names:
+            try:
+                p.style = doc.styles[sn]
+                applied_style = True
+                break
+            except KeyError:
+                continue
 
         for run in p.runs:
             set_run_font(run,
@@ -513,7 +519,7 @@ def phase_c_headings(doc, rules):
                               space_after=heading_sa,
                               first_line_indent_cm=0,
                               alignment=WD_ALIGN_PARAGRAPH.LEFT)
-        changes.append(f"{ptype} → {style_name} ({font_config.get('chinese','?')} "
+        changes.append(f"{ptype} → {style_names[0]} ({font_config.get('chinese','?')} "
                        f"{font_config.get('size_pt','?')}pt"
                        f"{' Bold' if font_config.get('bold') else ''}): "
                        f"{p.text.strip()[:50]}")
@@ -666,6 +672,154 @@ def phase_e_references(doc, rules):
 
 
 # ═══════════════════════════════════════════════════════════
+# Phase F: Citation Superscript
+# ═══════════════════════════════════════════════════════════
+
+def phase_f_citation_superscript(doc, rules):
+    """Convert 【N】 style citations to superscript [N] format.
+
+    Works at paragraph level because citations are often split across runs
+    due to mixed Chinese/English text. Handles 【1】, 【2】【3】, 【1,2】 etc.
+    Only modifies body text — skips 【摘要】, 【关键词】, and reference section.
+    """
+    changes = []
+    citation_pattern = re.compile(r'【(\d+(?:[,，]\s*\d+)*)】')
+
+    in_refs = False
+
+    for p in doc.paragraphs:
+        text = p.text.strip()
+
+        # Detect reference section
+        if text == '参考文献' or text.startswith('参考文献'):
+            in_refs = True
+            continue
+        if in_refs or not text:
+            continue
+
+        # Skip if no citation
+        if '【' not in text:
+            continue
+
+        # Skip 【摘要】 and 【关键词】 labels
+        if re.match(r'^【?\s*(?:摘\s*要|关键[词字])\s*】?', text):
+            continue
+
+        # Check for actual digit-based citations
+        if not citation_pattern.search(text):
+            continue
+
+        # Find all citations in full paragraph text
+        citations = []
+        for m in citation_pattern.finditer(text):
+            refs = re.split(r'[,，]\s*', m.group(1))
+            citations.append({
+                'start': m.start(), 'end': m.end(),
+                'new_text': '[' + ','.join(refs) + ']',
+            })
+
+        if not citations:
+            continue
+
+        runs = p.runs
+        if not runs:
+            continue
+
+        # Build char-position → run mapping
+        run_map = []
+        pos = 0
+        for run in runs:
+            t = run.text
+            run_map.append((pos, pos + len(t), run))
+            pos += len(t)
+
+        # Rebuild runs with superscript citations
+        new_elements = []
+        cursor = 0
+
+        for cit in sorted(citations, key=lambda c: c['start']):
+            if cursor < cit['start']:
+                _copy_runs_in_range(run_map, cursor, cit['start'], new_elements)
+            # Citation as superscript — clone font from nearest run
+            sample = _find_run_at_pos(run_map, cit['start']) or runs[0]
+            new_elements.append(_clone_run_superscript(sample, cit['new_text']))
+            cursor = cit['end']
+
+        if cursor < len(text):
+            _copy_runs_in_range(run_map, cursor, len(text), new_elements)
+
+        # Replace runs
+        for run in runs:
+            p._element.remove(run._element)
+        for el in new_elements:
+            p._element.append(el)
+
+        changes.append(f"Citation → superscript: {text[:80]}...")
+
+    return changes
+
+
+def _clone_run_superscript(base_run, text):
+    """Clone a run with given text, set as superscript."""
+    from copy import deepcopy
+    new_el = deepcopy(base_run._element)
+    for t in new_el.findall(qn('w:t')):
+        new_el.remove(t)
+    new_t = OxmlElement('w:t')
+    new_t.set(qn('xml:space'), 'preserve')
+    new_t.text = text
+    new_el.append(new_t)
+    rPr = new_el.find(qn('w:rPr'))
+    if rPr is None:
+        rPr = OxmlElement('w:rPr')
+        new_el.insert(0, rPr)
+    for va in rPr.findall(qn('w:vertAlign')):
+        rPr.remove(va)
+    va = OxmlElement('w:vertAlign')
+    va.set(qn('w:val'), 'superscript')
+    rPr.append(va)
+    for sz in rPr.findall(qn('w:sz')):
+        rPr.remove(sz)
+    sz = OxmlElement('w:sz')
+    sz.set(qn('w:val'), '15')
+    rPr.append(sz)
+    return new_el
+
+
+def _find_run_at_pos(run_map, char_pos):
+    """Find the run covering a character position."""
+    for start, end, run in run_map:
+        if start <= char_pos < end:
+            return run
+    for start, end, run in run_map:
+        if char_pos == end:
+            return run
+    return None
+
+
+def _copy_runs_in_range(run_map, range_start, range_end, output_list):
+    """Copy original runs clipped to [range_start, range_end)."""
+    from copy import deepcopy
+    for run_start, run_end, run in run_map:
+        if run_end <= range_start:
+            continue
+        if run_start >= range_end:
+            break
+        clip_start = max(run_start, range_start)
+        clip_end = min(run_end, range_end)
+        sub_text = run.text[clip_start - run_start:clip_end - run_start]
+        if sub_text:
+            new_el = deepcopy(run._element)
+            for t in new_el.findall(qn('w:t')):
+                new_el.remove(t)
+            new_t = OxmlElement('w:t')
+            new_t.set(qn('xml:space'), 'preserve')
+            new_t.text = sub_text
+            new_el.append(new_t)
+            output_list.append(new_el)
+
+
+# ═══════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════
 
@@ -675,6 +829,7 @@ PHASES = {
     "C": ("Headings", phase_c_headings),
     "D": ("Tables + Figures", phase_d_tables_figures),
     "E": ("References", phase_e_references),
+    "F": ("Citation Superscript", phase_f_citation_superscript),
 }
 
 
@@ -699,7 +854,7 @@ def main():
     print()
 
     if args.phase == "all":
-        phases_to_run = ["A", "B", "C", "D", "E"]
+        phases_to_run = ["A", "B", "C", "D", "E", "F"]
     else:
         phases_to_run = [p.strip() for p in args.phase.split(",")]
 
